@@ -1,0 +1,133 @@
+name: Certificate Generation Tests
+
+on:
+  push:
+    branches: master
+  pull_request:
+    branches: master
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Test Certificate Generation Scripts
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        openssl-version:
+          - '3.0'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install OpenSSL ${{ matrix.openssl-version }}
+      if: runner.os == 'Linux'
+      run: |
+        if [ "${{ matrix.openssl-version }}" = "3.0" ]; then
+          sudo apt-get update
+          sudo apt-get install -y openssl
+        fi
+
+    - name: Install OpenSSL ${{ matrix.openssl-version }}
+      if: runner.os == 'macOS'
+      run: |
+        if [ "${{ matrix.openssl-version }}" = "3.0" ]; then
+          brew install openssl@3
+          echo "/opt/homebrew/opt/openssl@3/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Verify OpenSSL installation
+      run: |
+        openssl version
+        which openssl
+
+    - name: Run certificate tests
+      run: |
+        ./test/test.sh
+
+    - name: Upload test artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-artifacts-${{ matrix.os }}-openssl-${{ matrix.openssl-version }}
+        path: |
+          test_certs/
+          *.log
+        retention-days: 7
+
+    - name: Generate test report
+      if: always()
+      run: |
+        echo "## Certificate Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "OpenSSL Version: $(openssl version)" >> $GITHUB_STEP_SUMMARY
+        if [ -f test_results.log ]; then
+          echo "### Test Output" >> $GITHUB_STEP_SUMMARY
+          echo '```&#x27; &gt;&gt; $GITHUB_STEP_SUMMARY
+          cat test_results.log &gt;&gt; $GITHUB_STEP_SUMMARY
+          echo &#x27;```' >> $GITHUB_STEP_SUMMARY
+        fi
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup test environment
+      run: |
+        mkdir -p integration_test
+        cd integration_test
+
+    - name: Test certificate generation workflow
+      run: |
+        cd integration_test
+
+        # Generate certificates
+        ../ca.sh "IntegrationCA"
+        ../server.sh "integration.test.com" "IntegrationCA"
+        ../client.sh "integration-client" "IntegrationCA"
+
+        # Test with nginx configuration
+        cat > nginx.conf << EOF
+        events {}
+        http {
+          server {
+            listen 443 ssl;
+            server_name integration.test.com;
+            ssl_certificate integration.test.com/server.pem;
+            ssl_certificate_key integration.test.com/server.key;
+            ssl_client_certificate IntegrationCA/ca.pem;
+            ssl_verify_client on;
+            location / {
+              return 200 "SSL OK";
+            }
+          }
+        }
+        EOF
+
+        # Validate nginx config
+        sudo nginx -t -c $(pwd)/nginx.conf
+
+    - name: Test certificate expiration monitoring
+      run: |
+        cd integration_test
+
+        # Check certificate expiration dates
+        for cert in */*.pem; do
+          if [ -f "$cert" ]; then
+            echo "Checking $cert:"
+            openssl x509 -in "$cert" -noout -dates
+            # Warn if certificate expires within 30 days
+            if ! openssl x509 -in "$cert" -checkend 2592000; then
+              echo "Warning: Certificate $cert expires within 30 days"
+            fi
+          fi
+        done
