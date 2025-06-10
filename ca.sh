@@ -12,7 +12,7 @@ pass=$(openssl rand -base64 32)
 echo "Generating CA..."
 openssl genpkey -algorithm RSA -out ${dir}/ca.key.enc -aes256 -pass pass:${pass}
 openssl req -x509 -new -nodes -key ${dir}/ca.key.enc -sha256 -days 3650 -out ${dir}/ca.pem -passin pass:${pass} \
-        -subj "/C=US/ST=State/L=City/O=Organization/OU=OrgUnit/CN=MyCA" \
+        -subj "/C=US/ST=State/L=City/O=Organization/OU=OrgUnit/CN=${cn}" \
         -addext 'keyUsage = cRLSign, keyCertSign, digitalSignature' \
         -addext 'extendedKeyUsage = critical, serverAuth, clientAuth, codeSigning, emailProtection, timeStamping' \
         -addext 'subjectKeyIdentifier=hash' \
